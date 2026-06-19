@@ -24,7 +24,7 @@ MCP Server for Kingdee K3Cloud ERP. Connect AI assistants to your ERP system via
 
 ## 功能特性
 
-- **15 个 MCP 工具**：覆盖查询、大数据量导出、新增、提交、审核、反审核、删除、下推等核心操作
+- **18 个 MCP 工具**：覆盖查询、大数据量导出、写入预览、新增、提交、审核、反审核、删除、下推等核心操作
 - **通用接口设计**：单一 `form_id` 参数支持物料、客户、销售订单、采购订单等所有表单，无需为每种业务单独配置
 - **高阶查询原语**：`query_bill_all`（自动翻页）、`query_bill_to_file`（流式落盘）、`query_bill_range`（日期分片），彻底消除模型手动循环的负担
 - **只读/读写模式**：可限制 AI 只能查询，防止误操作
@@ -202,10 +202,19 @@ FASTMCP_HOST=0.0.0.0 FASTMCP_PORT=8080 uvx kingdee-k3cloud-mcp --transport sse
 
 ## 可用工具
 
+### 必备工具（规范要求，只读模式下可用）
+
+| 工具 | 说明 |
+|------|------|
+| `health_check` | 检查 K3Cloud 连接状态和 Server 运行模式 |
+| `query_metadata` | 查询表单字段结构（元数据） |
+| `preview_write` | 预览写入操作，不实际修改数据 |
+
 ### 查询工具（只读模式下可用）
 
 | 工具 | 说明 |
 |------|------|
+| `get_profile` | 获取 MCP Server 身份和连接配置信息 |
 | `query_bill` | 查询单据数据（返回二维数组） |
 | `query_bill_json` | 查询单据数据（返回 JSON，字段名作为 key） |
 | `count_bill` | 估算查询结果行数，用于大数据量查询前的探测 |
@@ -213,7 +222,6 @@ FASTMCP_HOST=0.0.0.0 FASTMCP_PORT=8080 uvx kingdee-k3cloud-mcp --transport sse
 | `query_bill_to_file` | 自动翻页并流式写入本地文件（ndjson / csv），适合万行以上导出 |
 | `query_bill_range` | 按日期自动分片（月/周/日）+ 翻页，适合跨月/跨年查询，支持落盘 |
 | `view_bill` | 查看单条记录完整详情 |
-| `query_metadata` | 查询表单字段结构（元数据） |
 
 ### 写入工具（读写模式下可用）
 
@@ -231,7 +239,7 @@ FASTMCP_HOST=0.0.0.0 FASTMCP_PORT=8080 uvx kingdee-k3cloud-mcp --transport sse
 
 ## 只读模式
 
-通过 `--mode readonly` 或 `MCP_MODE=readonly` 限制服务器只暴露 8 个查询工具，防止 AI 误操作写入数据。
+通过 `--mode readonly` 或 `MCP_MODE=readonly` 限制服务器只暴露 11 个只读工具（必备 + 查询），防止 AI 误操作写入数据。
 
 ```json
 "args": ["kingdee-k3cloud-mcp", "--mode", "readonly"]
@@ -265,6 +273,25 @@ kingdee-k3cloud-mcp（本项目）
         ▼
 金蝶云星空 K3Cloud
 ```
+
+### 项目结构
+
+```
+src/kingdee_k3cloud_mcp/
+├── server.py              # 入口：FastMCP 实例、SDK 管理、分页原语、setup/main
+├── utils.py               # 工具注解、统一返回格式、会话检测、辅助函数
+├── sdk/
+│   └── __init__.py         # RetryableK3CloudApiSdk（会话自动恢复）
+└── tools/
+    ├── __init__.py          # ToolContext + register_all_tools 统一注册
+    ├── essential.py         # 必备工具：health_check, query_metadata, preview_write
+    ├── profile.py           # 推荐工具：get_profile
+    ├── query.py             # 查询工具：query_bill, count_bill, query_bill_all 等 6 个
+    ├── read.py              # 读取工具：view_bill
+    └── write.py             # 写入工具：save_bill, submit_bill, delete_bill 等 7 个
+```
+
+工具按功能领域分文件组织，符合《企业管理软件 MCP 标准服务规范》。每个工具标注风险等级注解（`READ_ONLY_TOOL` / `WRITE_TOOL` / `DESTRUCTIVE_TOOL`），便于 MCPHub 做权限治理。
 
 本项目使用官方金蝶 Python SDK（[kingdee-cdp-webapi-sdk](https://pypi.org/project/kingdee-cdp-webapi-sdk/)）与 K3Cloud API 通信，并通过 [FastMCP](https://github.com/modelcontextprotocol/python-sdk) 将其封装为标准 MCP 工具。
 

@@ -1,19 +1,21 @@
 """鼎捷 ERP MCP Server 测试配置"""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from dingjie_erp_mcp.sdk import DingjieClient
 
 
 @pytest.fixture
 def mock_client():
     """Mock 鼎捷 ERP 客户端"""
-    with patch("dingjie_erp_mcp.sdk.DingjieClient._authenticate"):
-        client = DingjieClient(
-            server_url="https://erp.test.com",
-            app_id="test_app",
-            app_secret="test_secret",
-        )
+    client = DingjieClient(
+        server_url="https://erp.test.com",
+        key="test_key",
+        ent_id="99",
+        company_id="DSCTC",
+    )
+    # Mock 网络请求方法
+    client.call_service = MagicMock(return_value={"execution": {"code": "0"}, "parameter": {}})
     return client
 
 

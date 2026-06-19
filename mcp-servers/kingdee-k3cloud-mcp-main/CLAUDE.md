@@ -28,10 +28,48 @@
 
 | 文件 | 说明 |
 |------|------|
-| `src/kingdee_k3cloud_mcp/server.py` | 所有 MCP tool 定义 |
+| `src/kingdee_k3cloud_mcp/server.py` | 入口：FastMCP 实例、SDK 管理、分页原语、setup/main |
+| `src/kingdee_k3cloud_mcp/utils.py` | 工具注解常量、统一返回格式、会话检测、辅助函数 |
+| `src/kingdee_k3cloud_mcp/sdk/__init__.py` | RetryableK3CloudApiSdk（会话自动恢复） |
+| `src/kingdee_k3cloud_mcp/tools/__init__.py` | ToolContext + register_all_tools 统一注册 |
+| `src/kingdee_k3cloud_mcp/tools/essential.py` | 必备工具：health_check, query_metadata, preview_write |
+| `src/kingdee_k3cloud_mcp/tools/profile.py` | 推荐工具：get_profile |
+| `src/kingdee_k3cloud_mcp/tools/query.py` | 查询工具：query_bill, count_bill 等 6 个 |
+| `src/kingdee_k3cloud_mcp/tools/read.py` | 读取工具：view_bill |
+| `src/kingdee_k3cloud_mcp/tools/write.py` | 写入工具：save_bill, delete_bill 等 7 个 |
 | `pyproject.toml` | 版本号、依赖 |
 | `CHANGELOG.md` | 每次 release 必须更新 |
-| `tests/test_server.py` | 单元测试，新增 tool 需补测试 |
+| `tests/test_server.py` | 单元测试（分页、会话恢复、工具函数） |
+| `tests/test_tools.py` | 工具契约测试（读写工具、只读守卫） |
+
+## 项目结构
+
+```
+src/kingdee_k3cloud_mcp/
+├── __init__.py
+├── server.py              # 入口（不定义业务工具，只做注册和启动）
+├── utils.py               # 公共辅助函数和工具注解常量
+├── sdk/
+│   └── __init__.py         # SDK 封装（RetryableK3CloudApiSdk）
+└── tools/
+    ├── __init__.py          # ToolContext + register_all_tools
+    ├── essential.py         # 必备工具（规范要求）
+    ├── profile.py           # 推荐工具
+    ├── query.py             # 查询类工具
+    ├── read.py              # 读取类工具
+    └── write.py             # 写入类工具
+```
+
+工具按功能领域分文件组织，符合《企业管理软件 MCP 标准服务规范》。
+
+## 新增工具流程
+
+1. 在对应的 `tools/` 子模块中添加工具函数（模块顶层定义，使用 `_ctx` 单例）
+2. 在 `register_xxx_tools()` 中注册，添加 `annotations` 注解
+3. 在 `server.py` 中 re-export 新函数（供测试导入）
+4. 在 `tests/test_tools.py` 补充测试
+5. 更新 `README.md` 工具表
+6. 更新 `CHANGELOG.md`
 
 ## 与 skill repo 的关系
 

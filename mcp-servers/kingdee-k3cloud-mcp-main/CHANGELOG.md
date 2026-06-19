@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **模块化重构**：将单文件 `server.py`（1094行）拆分为模块化结构，符合《企业管理软件 MCP 标准服务规范》。
+  - `server.py` 精简为入口文件（300行），只负责 FastMCP 实例、SDK 管理、分页原语和启动
+  - 新增 `utils.py`：工具注解常量（`READ_ONLY_TOOL` / `WRITE_TOOL` / `DESTRUCTIVE_TOOL`）、统一返回格式、会话检测
+  - 新增 `sdk/__init__.py`：`RetryableK3CloudApiSdk` 会话自动恢复
+  - 新增 `tools/` 目录：按功能领域分文件（essential/profile/query/read/write）
+  - 使用 `ToolContext` + `register_xxx_tools()` 函数式注册，替代 import 副作用
+  - 所有工具标注风险等级注解，便于 MCPHub 权限治理
+- **工具表补全**：README 中补全 `health_check`、`preview_write`、`get_profile` 三个工具的说明
+
 ## [1.3.2] - 2026-05-29
 
 ### Fixed

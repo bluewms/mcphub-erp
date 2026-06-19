@@ -1,17 +1,20 @@
 # 企业管理软件 MCP 标准服务规范
 
+> 以 Odoo MCP Server 的实际实现为基准。标准定在"跳一跳够得着"的水平，
+> 不追求完美，确保鼎捷、金蝶、Salesforce 等连接器能在合理工作量内达标。
+
 ## 目的
 
-本规范用于指导 Odoo、金蝶、鼎捷、用友、SAP、自研 ERP、WMS、MES、CRM、OA、财务系统等企业管理软件 MCP Server 的统一开发。
+本规范用于指导 Odoo、金蝶、鼎捷、用友、SAP、Salesforce、自研 ERP、WMS、MES、CRM、OA、财务系统等企业管理软件 MCP Server 的统一开发。
 
 统一标准后，MCPHub 可以用同一套方式管理不同系统：
 
 - 安装和配置。
 - 启停和健康检查。
-- 工具发现和能力展示。
+- 工具发现。
 - 只读/读写模式控制。
 - Group 权限和 Tool 风险治理。
-- 审计、日志、告警和人工审批。
+- 审计和人工审批。
 
 ## 适用范围
 
@@ -26,15 +29,12 @@
 
 ## 设计原则
 
-- 默认只读：任何新连接器默认不允许写入。
-- 最小权限：ERP 集成账号只授予业务必需权限。
-- 可解释：每个工具名、描述、参数、返回值都要让 AI 和人能理解。
-- 可治理：每个工具必须能归类到业务域、读写属性和风险等级。
-- 可审计：所有写入、审批、删除、批量操作必须留下审计事件。
-- 可降级：ERP 不可用时返回结构化错误，不让 AI 猜测。
-- 可扩展：不同 ERP 的差异通过元数据和能力清单暴露，不硬编码到 MCPHub。
-- 可兼容：同一企业软件不同版本的 API、字段、流程差异必须被显式声明和检测。
-- 删除默认关闭：删除能力不得随读写模式自动开放，必须单独启用、单独授权、单独审计。
+- **默认只读**：连接器默认不允许写入，需显式开启。
+- **最小权限**：ERP 集成账号只授予业务必需权限。
+- **可解释**：每个工具名、描述、参数都要让 AI 和人能理解。
+- **可审计**：写入操作应可留下审计记录（opt-in）。
+- **可降级**：ERP 不可用时返回错误信息，不让 AI 猜测。
+- **不暴露任意代码执行**：禁止暴露可执行任意 SQL、脚本或代码的工具。
 
 ## Server 命名规范
 
@@ -56,101 +56,146 @@ internal-sap-dev
 字段说明：
 
 - `client`：客户或租户标识。
-- `system`：系统类型，例如 `odoo`、`kingdee`、`dingjie`、`yonyou`、`sap`、`wms`。
+- `system`：系统类型，例如 `odoo`、`kingdee`、`dingjie`、`yonyou`、`sap`、`salesforce`、`wms`。
 - `env`：环境，例如 `prod`、`staging`、`dev`、`test`。
 
 ## 必备启动参数
 
-所有 MCP Server 必须支持以下环境变量或等价启动参数：
+所有 MCP Server 必须支持以下环境变量：
 
 ```text
-MCP_MODE=readonly|readwrite
-MCP_SERVER_NAME=client-a-odoo-prod
-MCP_CLIENT_ID=client-a
-MCP_ENV=prod|staging|dev|test
-MCP_LOCALE=zh_CN
-MCP_TIMEZONE=Asia/Shanghai
-MCP_AUDIT_LOG=/path/to/audit.jsonl
-MCP_LOG_LEVEL=INFO
-MCP_ALLOWED_TOOLS=query_*,read_*
-MCP_DENIED_TOOLS=delete_*,danger_*
-MCP_ERP_VERSION=auto
-MCP_ENABLE_DELETE=false
+MCP_MODE=readonly|readwrite      # 读写模式，默认 readonly
+MCP_LOG_LEVEL=INFO               # 日志级别
+```
+
+各 ERP 自身的连接参数（如 URL、账号、密钥）通过各自的环境变量配置，命名前缀建议与系统一致：
+
+```text
+# 鼎捷
+DINGJIE_SERVER_URL / DINGJIE_KEY / DINGJIE_ENT_ID / DINGJIE_COMPANY_ID
+
+# 金蝶
+KD_SERVER_URL / KD_ACCT_ID / KD_USERNAME / KD_APP_ID / KD_APP_SEC
+
+# Odoo
+ODOO_URL / ODOO_DB / ODOO_USERNAME / ODOO_PASSWORD（或 odoo_config.json）
+
+# Salesforce
+SALESFORCE_ACCESS_TOKEN / SALESFORCE_INSTANCE_URL
 ```
 
 要求：
 
 - `MCP_MODE` 默认值必须是 `readonly`。
-- 当 `MCP_MODE=readonly` 时，写入、审批、删除、作废、批量更新工具必须不可执行。
-- `MCP_ENABLE_DELETE` 默认值必须是 `false`。
-- 即使 `MCP_MODE=readwrite`，只要 `MCP_ENABLE_DELETE` 不是显式 true，删除工具也必须不可执行。
-- `MCP_ERP_VERSION=auto` 表示启动后通过 ERP API 自动识别版本；无法自动识别时必须允许人工配置。
-- `MCP_ALLOWED_TOOLS` 和 `MCP_DENIED_TOOLS` 用于快速限制工具范围。
+- 当 `MCP_MODE=readonly` 时，写入、审核、删除工具必须不可执行（注册了也返回错误）。
 - 密钥、密码、Token 不得打印到日志。
 
-## 企业软件版本规范
+### 可选参数
 
-企业管理软件通常存在多版本、多补丁、多部署形态。连接器必须把版本作为一等治理对象处理。
+以下参数为推荐支持，非强制：
 
-必须支持：
+```text
+MCP_AUDIT_LOG=/path/to/audit.jsonl   # 审计日志文件路径，不设置则不记录
+MCP_API_KEY=your-secret-key          # SSE/HTTP 模式下的 Bearer Token 鉴权
+```
 
-- 自动识别 ERP 实际版本。
-- 人工指定 ERP 版本。
-- 声明连接器支持的版本范围。
-- 声明当前版本下不可用或降级的工具。
-- 在 `health_check` 和 `get_server_profile` 中返回版本兼容状态。
+## 版本识别（推荐，非强制）
 
-版本信息至少包含：
+连接器应尽量在 `health_check` 中返回 ERP 实际版本，但不强制要求版本兼容矩阵。
+
+最低要求：
+
+- `health_check` 返回中尽量包含 `erp_version` 字段（能获取到的话）。
+- 如果无法自动获取版本，可以不返回，不影响合规。
+
+示例（Odoo 实现）：
 
 ```json
 {
-  "product": "odoo",
-  "edition": "enterprise",
-  "version": "18.0",
-  "build": "20260601",
-  "api": {
-    "protocol": "xmlrpc",
-    "version": "1"
+  "server_version": "18.0",
+  "transport": "xmlrpc"
+}
+```
+
+各 ERP 版本差异由工具描述和 `query_metadata` 体现，不强制做版本兼容检查。
+
+## 必备工具
+
+每个 MCP Server 必须实现以下 3 个工具。
+
+### health_check
+
+用途：检查 MCP Server 自身状态和 ERP 连接是否可用。
+
+输出（参考 Odoo 实现，保持简单）：
+
+```json
+{
+  "success": true,
+  "server": {
+    "name": "odoo-mcp",
+    "mode": "readonly",
+    "tool_count": 39
   },
-  "compatibility": {
-    "supported": true,
-    "supported_versions": [">=16.0", "<=19.0"],
-    "warnings": []
+  "erp": {
+    "reachable": true,
+    "version": "18.0"
   }
 }
 ```
 
-版本差异示例：
+要求：
 
-- Odoo 16-18 通常使用 XML-RPC，Odoo 19+ 可能使用 JSON-2。
-- 金蝶云星空不同版本和补丁可能存在字段标识、表单插件、审批流差异。
-- 鼎捷 E10 不同客户环境可能有自定义单据、字段和接口扩展。
-- SAP ECC 与 S/4HANA 的对象模型、接口协议和字段语义可能不同。
-- 用友不同产品线和版本的 API、单据状态、组织账套模型可能不同。
+- 必须返回 `success` 字段。
+- 必须返回当前 `mode`（readonly/readwrite）。
+- 尽量检查 ERP 连接是否可达，无法检查时返回 `reachable: unknown`。
+- 失败时返回 `{"success": false, "error": "错误描述"}`。
 
-如果版本不兼容：
+### query_metadata
 
-- `health_check.ok` 可以为 true，但必须返回 `compatibility.supported=false`。
-- 写入、审批、删除、批量操作必须默认禁用。
-- 工具描述必须说明该工具在当前版本不可用或仅部分可用。
-- 错误码建议使用 `ERP_VERSION_UNSUPPORTED` 或 `ERP_FEATURE_UNSUPPORTED`。
-
-## 必备工具
-
-每个企业管理软件 MCP Server 必须实现以下工具。
-
-### health_check
-
-用途：
-
-检查 MCP Server 自身、ERP 连接、认证、账套、组织、基础权限是否可用。
+用途：查询业务对象字段、类型等信息，帮助 AI 构造正确参数。
 
 输入：
 
 ```json
 {
-  "include_permissions": false,
-  "include_latency": true
+  "object": "purchase_receipt"
+}
+```
+
+输出（字段信息，格式可以灵活适配各 ERP）：
+
+```json
+{
+  "object": "purchase_receipt",
+  "fields": [
+    {"name": "doc_no", "type": "string", "desc": "单号"},
+    {"name": "supplier_no", "type": "string", "desc": "供应商编号", "required": true},
+    {"name": "doc_date", "type": "date", "desc": "单据日期"}
+  ]
+}
+```
+
+要求：
+
+- 返回字段名、类型、说明。
+- 如果该 ERP 能获取必填信息，应返回 `required` 标记。
+- 不同 ERP 的元数据格式可能不同，不需要完全统一，但要包含字段名和类型。
+
+### preview_write（写入预览）
+
+用途：对写入操作进行执行前预览，让 AI 和人确认将要发生的变更。
+
+> 对应 Odoo 的 `preview_write` 工具。如果连接器暂时无法实现完整的 preview，
+> 至少在写入工具的描述中说明风险，并支持只读模式拦截。
+
+输入：
+
+```json
+{
+  "object": "purchase_receipt",
+  "operation": "create",
+  "values": {"supplier_no": "S001", "doc_date": "2026-06-19"}
 }
 ```
 
@@ -158,184 +203,228 @@ MCP_ENABLE_DELETE=false
 
 ```json
 {
-  "ok": true,
-  "server_name": "client-a-odoo-prod",
-  "system": "odoo",
-  "environment": "prod",
-  "mode": "readonly",
-  "erp": {
-    "reachable": true,
-    "authenticated": true,
-    "version": "18.0",
-    "company": "Client A",
-    "compatibility": {
-      "supported": true,
-      "supported_versions": [">=16.0", "<=19.0"],
-      "warnings": []
-    }
-  },
-  "latency_ms": 120,
+  "success": true,
+  "operation": "create",
+  "object": "purchase_receipt",
+  "summary": "将创建采购入库单，供应商 S001，1 条明细",
+  "risk": "write",
   "warnings": []
 }
 ```
 
-失败时必须返回结构化错误，不得只返回字符串。
+要求：
 
-### get_server_profile
+- 只读模式下 `preview_write` 仍可调用（它不修改数据）。
+- 返回操作摘要，让 AI 和人理解将要发生什么。
 
-用途：
+## 推荐工具（非强制）
 
-让 MCPHub 或 AI 获取该 MCP Server 的身份、版本、业务域和治理信息。
+以下工具为推荐实现，有助于提升体验和治理能力：
 
-输出：
+### get_profile
+
+返回 MCP Server 的身份和配置信息。参考 Odoo 的 `get_odoo_profile`。
 
 ```json
 {
-  "server_name": "client-a-odoo-prod",
-  "standard_version": "1.0",
-  "connector": {
-    "system": "odoo",
-    "name": "Odoo MCP",
-    "version": "0.1.0"
-  },
-  "erp_version": {
-    "product": "odoo",
-    "edition": "enterprise",
-    "version": "18.0",
-    "api_protocol": "xmlrpc",
-    "supported": true,
-    "supported_versions": [">=16.0", "<=19.0"]
-  },
-  "tenant": {
-    "client_id": "client-a",
-    "environment": "prod"
-  },
-  "mode": "readonly",
-  "supported_transports": ["stdio", "sse", "streamable-http"],
-  "business_domains": ["master_data", "sales", "purchase", "inventory", "finance"],
-  "risk_policy": {
-    "default_risk": "read",
-    "write_requires_approval": true,
-    "delete_enabled": false,
-    "danger_tools_disabled": true
-  }
+  "success": true,
+  "url": "https://erp.example.com",
+  "database": "OLS",
+  "username": "admin",
+  "transport": "xmlrpc",
+  "server_version": "18.0"
 }
 ```
 
 ### list_capabilities
 
-用途：
-
-声明该 MCP Server 支持哪些业务对象、操作和风险等级。MCPHub 后续可用它做模板安装、权限展示和工具治理。
-
-输出：
+声明支持的业务对象和操作，便于 MCPHub 做工具治理。
 
 ```json
 {
   "capabilities": [
-    {
-      "domain": "inventory",
-      "object": "material",
-      "operations": ["query", "read"],
-      "tools": ["query_materials", "read_material"],
-      "risk": "read"
-    },
-    {
-      "domain": "sales",
-      "object": "sales_order",
-      "operations": ["query", "read", "create", "approve"],
-      "tools": ["query_sales_orders", "read_sales_order", "create_sales_order", "approve_sales_order"],
-      "risk": "workflow",
-      "requires_approval": true,
-      "supported_versions": [">=8.0"],
-      "version_notes": "不同版本的审批状态字段可能不同，执行前必须调用 query_metadata"
-    }
+    {"object": "purchase_receipt", "operations": ["query", "read", "create", "approve", "delete"]},
+    {"object": "sales_issue", "operations": ["query", "read", "create", "approve", "delete"]},
+    {"object": "material", "operations": ["query", "read"]}
   ]
 }
 ```
 
-### query_metadata
+## 工具分类与目录结构
 
-用途：
+### 设计原则
 
-查询业务对象字段、类型、必填、枚举、关联关系和权限。AI 使用该工具构造正确参数，MCPHub 可用于展示表单。
+- **server.py 只做入口**：FastMCP 实例创建、环境初始化、参数解析、启动。不定义业务工具。
+- **必备工具独立成模块**：`health_check`、`query_metadata`、`preview_write` 放入 `tools/essential.py`，不与业务工具混放。
+- **函数式注册**：每个工具模块导出 `register_xxx_tools(mcp, ctx)` 函数，由 `tools/__init__.py` 统一调用。不依赖 import 副作用。
+- **工具注解统一**：所有工具必须标注风险等级注解（见下文）。
 
-输入：
+### 标准目录结构
 
-```json
-{
-  "object": "sales_order",
-  "include_fields": true,
-  "include_enums": true,
-  "include_permissions": true
-}
+```text
+src/{erp}_mcp/
+├── __init__.py
+├── server.py                # 入口：FastMCP 实例、setup()、main()，不定义业务工具
+├── tools/
+│   ├── __init__.py          # register_all_tools(mcp, ctx) — 汇总注册
+│   ├── essential.py         # 必备工具：health_check, query_metadata, preview_write
+│   ├── profile.py           # 推荐工具：get_profile, list_capabilities
+│   ├── query.py             # 查询列表类工具（分页、过滤、批量导出）
+│   ├── read.py              # 读取单条详情类工具
+│   ├── write.py             # 写入类工具（create/update/approve/delete/push 等）
+│   └── {business_object}.py # 业务对象专属工具（可选，见下文分类策略）
+├── sdk/                     # ERP SDK 封装（如有）
+│   └── __init__.py
+└── utils.py                 # 公共辅助函数：_ok/_err/_paginate 等
 ```
 
-输出：
+### 分类策略
 
-```json
-{
-  "object": "sales_order",
-  "display_name": "销售订单",
-  "primary_key": "id",
-  "fields": [
-    {
-      "name": "customer_id",
-      "label": "客户",
-      "type": "reference",
-      "required": true,
-      "readonly": false,
-      "relation": "customer"
-    },
-    {
-      "name": "order_date",
-      "label": "订单日期",
-      "type": "date",
-      "required": true,
-      "readonly": false
-    }
-  ],
-  "permissions": {
-    "query": true,
-    "read": true,
-    "create": false,
-    "update": false,
-    "delete": false,
-    "approve": false
-  }
-}
+根据 ERP API 风格选择分类方式：
+
+**方式一：功能领域分类（适合通用 API 的 ERP）**
+
+当 ERP 的 API 是通用的（如金蝶的 `BillQuery(form_id, ...)`、Odoo 的 `model.search/read`、Salesforce 的 SOQL），工具不绑定特定业务对象，按功能领域分文件：
+
+```text
+tools/
+├── essential.py     # health_check, query_metadata, preview_write
+├── profile.py       # get_profile
+├── query.py         # query_bill, count_bill, query_bill_all, query_bill_to_file, query_bill_range
+├── read.py          # view_bill
+└── write.py         # save_bill, submit_bill, audit_bill, delete_bill, push_bill
 ```
 
-### validate_operation
+适用系统：金蝶、Odoo、SAP、Salesforce。
 
-用途：
+**方式二：业务对象分类（适合按对象封装 API 的 ERP）**
 
-对写入、审核、删除、作废、批量变更进行执行前校验。
+当 ERP 的 API 按业务对象独立封装（如鼎捷的 `create_purchase_receipt` / `query_sales_issues`），每个业务对象一个文件，包含完整 CRUD 工具链：
 
-输入：
-
-```json
-{
-  "operation": "approve",
-  "object": "sales_order",
-  "record_id": "SO202606190001",
-  "payload": {}
-}
+```text
+tools/
+├── essential.py           # health_check, query_metadata, preview_write
+├── profile.py             # get_profile
+├── purchase_receipt.py    # query/read/create/approve/disapprove/delete/invalid
+├── sales_issue.py         # query/read/create/approve/disapprove/delete/invalid
+└── material.py            # query/read
 ```
 
-输出：
+适用系统：鼎捷、用友、自研 ERP。
 
-```json
-{
-  "ok": true,
-  "operation": "approve",
-  "object": "sales_order",
-  "record_id": "SO202606190001",
-  "risk": "workflow",
-  "requires_approval": true,
-  "warnings": ["该订单审核后将影响可发货数量"],
-  "approval_hint": "需要业务负责人确认"
-}
+### 工具注解标准
+
+所有工具必须使用 MCP 工具注解（`annotations`）标注风险等级，便于 MCPHub 做权限治理和 Group 分组。
+
+三种注解常量（定义在 `server.py` 或 `utils.py` 中）：
+
+```python
+from mcp.types import ToolAnnotations
+
+READ_ONLY_TOOL = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
+PREVIEW_TOOL = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
+WRITE_TOOL = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
+DESTRUCTIVE_TOOL = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+```
+
+使用方式（FastMCP）：
+
+```python
+@mcp.tool(annotations=READ_ONLY_TOOL)
+def query_bill(...):
+    ...
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def delete_bill(...):
+    ...
+```
+
+风险等级映射：
+
+| 注解 | 对应风险等级 | 适用工具 | 只读模式可用 |
+|------|:---:|:---|:---:|
+| `READ_ONLY_TOOL` | read | query/read/count/metadata/profile | 是 |
+| `PREVIEW_TOOL` | read | preview_write（不修改数据） | 是 |
+| `WRITE_TOOL` | write | create/update/approve/disapprove/push | 否 |
+| `DESTRUCTIVE_TOOL` | danger | delete/invalid | 否 |
+
+### 注册方式标准
+
+统一使用函数式注册，不依赖 import 副作用。
+
+每个工具模块导出 `register_xxx_tools(mcp, ctx)` 函数：
+
+```python
+# tools/query.py
+
+def register_query_tools(mcp, ctx):
+    """注册查询类工具。
+
+    Args:
+        mcp: FastMCP 实例
+        ctx: ToolContext，包含 get_client/is_readonly/ok_fn/err_fn 等回调
+    """
+
+    @mcp.tool(annotations=READ_ONLY_TOOL)
+    def query_bill(form_id: str, field_keys: str, ...):
+        """查询单据数据。只读工具。"""
+        sdk = ctx.get_sdk()
+        ...
+        return ctx.ok(result)
+```
+
+`tools/__init__.py` 汇总注册：
+
+```python
+# tools/__init__.py
+
+from dataclasses import dataclass
+from .essential import register_essential_tools
+from .profile import register_profile_tools
+from .query import register_query_tools
+from .read import register_read_tools
+from .write import register_write_tools
+
+
+@dataclass
+class ToolContext:
+    """工具注册上下文，传递给每个 register 函数。"""
+    get_sdk: callable        # 获取 SDK 实例
+    is_readonly: callable    # 检查是否只读模式
+    ok: callable             # 构造成功返回
+    err: callable            # 构造错误返回
+    server_name: str         # 服务器名称
+
+
+def register_all_tools(mcp, ctx: ToolContext):
+    """注册所有 MCP 工具。"""
+    register_essential_tools(mcp, ctx)
+    register_profile_tools(mcp, ctx)
+    register_query_tools(mcp, ctx)
+    register_read_tools(mcp, ctx)
+    register_write_tools(mcp, ctx)
+```
+
+`server.py` 调用注册：
+
+```python
+# server.py
+
+mcp = FastMCP("kingdee-k3cloud")
+
+def main():
+    ...
+    setup()
+    from .tools import register_all_tools, ToolContext
+    ctx = ToolContext(
+        get_sdk=_sdk,
+        is_readonly=lambda: _readonly,
+        ok=_ok,
+        err=_err,
+        server_name="kingdee-k3cloud",
+    )
+    register_all_tools(mcp, ctx)
+    mcp.run(transport=args.transport)
 ```
 
 ## 工具命名规范
@@ -345,23 +434,16 @@ MCP_ENABLE_DELETE=false
 推荐动词：
 
 ```text
-query_*        查询列表，支持分页、过滤、排序
+query_*        查询列表，支持分页、过滤
 read_*         读取单条记录详情
-search_*       模糊搜索或智能搜索
+search_*       模糊搜索
 count_*        统计数量
-aggregate_*    分组汇总
 create_*       新建
 update_*       修改
-submit_*       提交
 approve_*      审核
 disapprove_*   反审核
-close_*        关闭
-cancel_*       取消
-invalid_*      作废
 delete_*       删除
-export_*       导出
-import_*       导入
-sync_*         同步
+invalid_*      作废
 ```
 
 推荐对象名：
@@ -380,8 +462,6 @@ sales_issue
 invoice
 payment
 voucher
-work_order
-approval_task
 ```
 
 示例：
@@ -389,107 +469,86 @@ approval_task
 ```text
 query_materials
 read_material
-query_purchase_orders
-read_purchase_order
+query_purchase_receipts
+read_purchase_receipt
 create_purchase_receipt
 approve_purchase_receipt
-query_sales_issues
-read_sales_issue
 ```
 
-禁止：
+要求：
 
-- 使用含糊名称，例如 `do_action`、`run`、`execute`。
-- 一个工具承担多个不相关业务动作。
-- 工具名里包含客户密钥、账套、组织等敏感信息。
+- 工具名应包含业务对象，避免纯通用名如 `run`、`execute`、`do_action`。
+- 如果 ERP 的 API 是通用的（如金蝶的 `BillQuery`、Salesforce 的 SOQL），应在工具名中体现用途，如 `query_bill`、`run_soql_query`。
 
 ## 工具描述规范
 
-每个工具描述必须包含：
+每个工具描述应包含：
 
-- 业务对象。
-- 操作类型。
+- 业务对象和操作类型。
 - 是否只读。
-- 风险等级。
-- 典型使用场景。
 - 重要限制。
 
 示例：
 
 ```text
-查询物料主数据列表。只读工具，风险等级 read。支持按编码、名称、物料分类和启用状态过滤，返回分页结果。不会修改 ERP 数据。
+查询物料主数据列表。只读工具。支持按编码、名称筛选，返回分页结果。
 ```
 
 写入工具示例：
 
 ```text
-创建采购入库单。写入工具，风险等级 write。执行前应先调用 validate_operation 校验字段和权限。生产环境建议要求人工审批。
+创建采购入库单。写入工具，只读模式下不可用。执行前建议先调用 preview_write 预览变更。
 ```
 
 ## 输入参数规范
 
-查询类工具必须支持：
+### 查询类工具
+
+应支持分页和基本过滤：
 
 ```json
 {
-  "filters": {},
-  "fields": [],
-  "page": 1,
-  "page_size": 50,
-  "sort": []
+  "filters": {"doc_no": "PR2026"},
+  "limit": 50,
+  "offset": 0
 }
 ```
 
 要求：
 
-- `page_size` 必须有上限，默认不超过 50 或 100。
-- `fields` 为空时返回业务常用字段。
-- 日期字段使用 ISO 8601 字符串。
-- 金额使用数字，返回时保留币种。
-- 复杂过滤条件必须结构化，不建议让 AI 拼接 ERP 原生 SQL。
+- `limit` 必须有上限（建议默认 50-100，最大 200）。
+- 日期字段使用 ISO 8601 字符串（YYYY-MM-DD）。
 
-写入类工具必须支持：
+### 写入类工具
 
-```json
-{
-  "payload": {},
-  "idempotency_key": "optional-client-generated-key",
-  "dry_run": true
-}
-```
+写入工具在只读模式下必须返回错误。
 
-要求：
+推荐支持预览机制：
 
-- 支持 `dry_run` 或先提供 `validate_operation`。
-- 批量写入必须限制最大条数。
-- 高风险操作必须有审批 token 或人工确认机制。
+- 方式一（推荐）：提供 `preview_write` 工具，先预览再执行。
+- 方式二（简化）：写入工具描述中说明风险，由 MCPHub Group 控制可见性。
+
+批量写入应限制最大条数（建议 100 条）。
 
 ## 返回结果规范
 
-查询列表返回：
+### 成功返回
+
+```json
+{
+  "success": true,
+  "data": {}
+}
+```
+
+查询列表可以简化为直接返回数据数组或带分页信息的对象：
 
 ```json
 {
   "items": [],
-  "page": 1,
-  "page_size": 50,
   "total": 120,
-  "has_more": true,
-  "warnings": []
-}
-```
-
-单条详情返回：
-
-```json
-{
-  "item": {},
-  "metadata": {
-    "object": "sales_order",
-    "record_id": "SO202606190001",
-    "last_updated_at": "2026-06-19T10:00:00+08:00"
-  },
-  "warnings": []
+  "limit": 50,
+  "offset": 0
 }
 ```
 
@@ -497,324 +556,160 @@ read_sales_issue
 
 ```json
 {
-  "ok": true,
-  "operation": "create",
-  "object": "purchase_receipt",
-  "record_id": "PR202606190001",
-  "status": "draft",
-  "audit_id": "audit-20260619-0001",
-  "warnings": []
+  "success": true,
+  "record_id": "PR202606190001"
 }
 ```
 
-## 错误规范
+### 错误返回
 
-所有错误必须结构化：
-
-```json
-{
-  "ok": false,
-  "error": {
-    "code": "ERP_AUTH_FAILED",
-    "message": "ERP authentication failed",
-    "user_message": "ERP 认证失败，请检查账号、密钥或账套配置。",
-    "retryable": false,
-    "details": {
-      "system": "kingdee",
-      "server_name": "client-a-kingdee-prod"
-    }
-  }
-}
-```
-
-推荐错误码：
-
-```text
-ERP_AUTH_FAILED
-ERP_PERMISSION_DENIED
-ERP_NOT_FOUND
-ERP_VALIDATION_FAILED
-ERP_VERSION_UNSUPPORTED
-ERP_FEATURE_UNSUPPORTED
-ERP_RATE_LIMITED
-ERP_TIMEOUT
-ERP_UNAVAILABLE
-ERP_CONFLICT
-ERP_WRITE_DISABLED
-MCP_INVALID_ARGUMENT
-MCP_TOOL_DENIED
-MCP_APPROVAL_REQUIRED
-MCP_INTERNAL_ERROR
-```
-
-## 风险等级规范
-
-工具必须归入以下风险等级之一：
-
-```text
-metadata   元数据、能力清单、健康检查
-read       查询、读取、搜索、统计、导出只读数据
-write      新建、修改、保存草稿
-workflow   提交、审核、反审核、下推、过账、关闭
-danger     删除、作废、批量修改、不可逆操作
-admin      系统配置、权限、凭据、同步任务、维护动作
-```
-
-默认策略：
-
-- `metadata` 和 `read` 可进入只读 Group。
-- `write` 只能进入业务写入 Group。
-- `workflow` 必须独立授权，建议人工审批。
-- `danger` 默认禁用。
-- `admin` 只允许内部管理员使用。
-
-## 删除权限规范
-
-删除能力必须作为独立高风险能力治理，不能和普通读写权限混在一起。
-
-默认要求：
-
-- `delete_*` 工具默认不注册或默认不可执行。
-- `MCP_ENABLE_DELETE=false` 时，所有删除工具必须返回 `MCP_TOOL_DENIED`。
-- `MCP_MODE=readwrite` 不代表允许删除。
-- `danger_tools_enabled=false` 时，删除、作废、批量修改、不可逆动作必须关闭。
-
-开通删除权限必须满足：
-
-- 管理员显式设置 `MCP_ENABLE_DELETE=true` 或等价配置。
-- MCPHub 把删除工具放入独立 Group，例如 `client-a-delete-approved`。
-- 开通界面必须提示风险：删除可能不可恢复，并可能影响财务、库存、审计和上下游单据。
-- 调用删除工具前必须先调用 `validate_operation` 或 `preview_operation`。
-- 执行删除必须要求人工审批、审批 token 或同等强确认。
-- 删除操作必须写入审计日志。
-
-删除工具返回的校验结果必须包含风险提示：
+统一使用简单格式（参考 Odoo 实现）：
 
 ```json
 {
-  "ok": true,
-  "operation": "delete",
-  "object": "sales_order",
-  "record_id": "SO202606190001",
-  "risk": "danger",
-  "requires_approval": true,
-  "warnings": [
-    "删除可能不可恢复",
-    "删除可能影响库存、财务、审计和上下游单据"
-  ]
-}
-```
-
-删除工具描述必须明确写出：
-
-```text
-删除销售订单。危险工具，风险等级 danger。默认关闭。删除可能不可恢复，并可能影响库存、财务、审计和上下游单据。执行前必须调用 validate_operation，并需要人工审批。
-```
-
-## 审计规范
-
-以下操作必须审计：
-
-- create
-- update
-- submit
-- approve
-- disapprove
-- close
-- cancel
-- invalid
-- delete
-- import
-- sync
-- admin
-
-审计事件格式：
-
-```json
-{
-  "audit_id": "audit-20260619-0001",
-  "timestamp": "2026-06-19T10:00:00+08:00",
-  "server_name": "client-a-odoo-prod",
-  "client_id": "client-a",
-  "system": "odoo",
-  "tool": "approve_sales_order",
-  "risk": "workflow",
-  "object": "sales_order",
-  "record_id": "SO202606190001",
-  "actor": {
-    "type": "mcp-client",
-    "id": "ai-assistant-prod"
-  },
-  "input_summary": {
-    "fields_changed": [],
-    "record_count": 1
-  },
-  "result": {
-    "ok": true,
-    "status": "approved"
-  }
+  "success": false,
+  "error": "ERP 认证失败，请检查账号配置"
 }
 ```
 
 要求：
 
+- `error` 为人类可读的中文描述。
+- 不要把 ERP 原始异常堆栈直接返回给 AI。
+- 不要在错误信息中暴露密钥、Token。
+
+## 风险等级
+
+工具按风险分为三类（简化版，用于 MCPHub Group 管理）：
+
+```text
+read       查询、读取、元数据 — 只读 Group 可用
+write      新建、修改、审核、反审核 — 需写入 Group
+danger     删除、作废、批量操作 — 需独立高危 Group
+```
+
+默认策略：
+
+- `read` 工具在只读模式下可用。
+- `write` 工具在只读模式下返回错误，需 `MCP_MODE=readwrite`。
+- `danger` 工具建议独立授权，MCPHub 管理员放入独立 Group。
+
+## 写入控制和审批
+
+### 只读模式
+
+- `MCP_MODE=readonly` 时，所有写入工具返回 `{"success": false, "error": "只读模式：写入操作已禁用"}`。
+- 写入工具可以注册但不可执行，返回明确错误信息。
+
+### 写入三段式（推荐）
+
+参考 Odoo 的实现，推荐写入操作使用三段式：
+
+```text
+preview_write  →  validate_write  →  execute_approved_write
+```
+
+- `preview_write`：预览将要发生的变更，不修改数据。
+- `validate_write`：校验字段和权限，生成审批 token。
+- `execute_approved_write`：凭 token 执行实际写入。
+
+审批 token 有有效期（Odoo 默认 10 分钟），过期需重新预览。
+
+如果三段式实现成本高，可以简化为：
+
+- 只读模式拦截 + 工具描述标注风险。
+- 由 MCPHub 的 Group 权限控制写入工具的可见性。
+
+### 删除控制
+
+删除工具（`delete_*`）属于高风险操作：
+
+- 只读模式下不可执行。
+- 建议通过独立环境变量或配置控制（如 Odoo 的 `ODOO_MCP_ENABLE_WRITES`）。
+- MCPHub 管理员应把删除工具放入独立高危 Group。
+- 删除工具描述应说明："删除操作可能不可恢复"。
+
+## 审计日志（推荐，非强制）
+
+推荐支持审计日志，但非强制要求。
+
+### 实现方式（参考 Odoo）
+
+通过环境变量开启，不设置则不记录（opt-in）：
+
+```text
+MCP_AUDIT_LOG=/path/to/audit.jsonl
+```
+
+审计日志为 JSONL 格式（每行一条），追加写入：
+
+```json
+{
+  "timestamp": "2026-06-19T10:00:00Z",
+  "event": "write",
+  "operation": "create",
+  "object": "purchase_receipt",
+  "record_id": "PR202606190001",
+  "outcome": "success"
+}
+```
+
+要求：
+
+- 只记录写入操作（create/update/delete/approve 等）。
 - 不记录明文密码、Token、API Key。
-- 对手机号、身份证、银行账号等敏感字段脱敏。
-- 审计日志应可落地到文件、数据库或外部日志系统。
+- 审计失败不应阻断业务操作（fail-open）。
 
-## 人工审批规范
+## 分页规范
 
-高风险工具建议使用三段式：
-
-```text
-validate_operation -> preview_operation -> execute_operation
-```
-
-或按业务对象拆分：
-
-```text
-validate_sales_order_approval
-preview_sales_order_approval
-approve_sales_order
-```
-
-审批摘要必须包含：
-
-- 操作对象。
-- 记录编号。
-- 影响字段。
-- 风险等级。
-- ERP 返回的业务提示。
-- 是否可回滚。
-
-## 分页和大数据规范
-
-查询工具必须分页。
+查询工具必须支持分页。
 
 默认限制：
 
 ```text
-page_size 默认 50
-page_size 最大 200
-导出最大行数默认 10000
-批量写入最大条数默认 100
+limit 默认 50
+limit 最大 200
+批量写入最大 100 条
 ```
 
-大数据导出建议提供：
+不同 ERP 的分页参数可以不同（如鼎捷用 `limit/offset`，金蝶用 `start_row/top_count`），但必须支持翻页。
 
-```text
-query_*_to_file
-export_*_to_file
-submit_async_task
-get_async_task
-```
-
-返回大结果时，应优先返回文件路径、任务 ID 或摘要，避免一次性塞满上下文。
+大数据量导出建议提供落盘工具（参考金蝶的 `query_bill_to_file`）。
 
 ## 安全规范
 
 - 默认只读。
-- 不允许执行任意 SQL、任意 Python、任意 JavaScript。
+- **禁止暴露可执行任意代码的工具**（如任意 SQL 执行、任意脚本执行、任意 REST 调用）。
 - 不允许把 ERP 原始异常堆栈直接返回给 AI。
 - 不允许日志输出密钥。
-- 不允许绕过 ERP 权限系统。
 - 所有 HTTP 请求必须设置超时。
-- 所有写入工具必须幂等或支持 `idempotency_key`。
-- 删除、作废、批量更新必须默认关闭；删除能力必须独立显式启用。
 
 ## Tool Schema 规范
 
-每个工具必须提供完整 JSON Schema：
+每个工具应提供参数描述：
 
-- 所有字段必须有 `description`。
-- 必填字段必须放入 `required`。
-- 枚举字段必须使用 `enum`。
-- 数组必须限制最大条数。
-- 字符串字段应声明格式，例如 `date`、`date-time`、`email`。
+- 参数应有 `description`。
+- 必填参数应在描述中说明。
+- 使用 FastMCP 时，通过函数签名和 docstring 自动生成 Schema。
 
-示例：
+## 连接器 manifest（产品化阶段）
 
-```json
-{
-  "type": "object",
-  "properties": {
-    "filters": {
-      "type": "object",
-      "description": "查询过滤条件"
-    },
-    "page": {
-      "type": "integer",
-      "description": "页码，从 1 开始",
-      "minimum": 1,
-      "default": 1
-    },
-    "page_size": {
-      "type": "integer",
-      "description": "每页数量，最大 200",
-      "minimum": 1,
-      "maximum": 200,
-      "default": 50
-    }
-  }
-}
-```
-
-## 连接器 manifest 建议
-
-产品化阶段，每个 MCP Server 仓库建议提供 `mcp-connector.json`：
+产品化阶段，每个 MCP Server 仓库建议提供 `mcp-connector.json`，用于 MCPHub 模板安装：
 
 ```json
 {
   "name": "kingdee-k3cloud",
   "display_name": "金蝶云星空",
-  "standard_version": "1.0",
   "description": "金蝶云星空 K3Cloud MCP Server",
-  "supported_erp_versions": [">=8.0"],
-  "version_detection": {
-    "mode": "auto",
-    "health_check_field": "erp.version"
-  },
-  "installations": {
-    "uvx": {
-      "command": "uvx",
-      "args": ["kingdee-k3cloud-mcp"]
-    }
-  },
+  "command": "uv",
+  "args": ["run", "--directory", "${__dirname}", "kingdee-k3cloud-mcp"],
   "arguments": {
-    "KD_SERVER_URL": {
-      "label": "金蝶服务器地址",
-      "required": true,
-      "secret": false
-    },
-    "KD_ACCT_ID": {
-      "label": "账套 ID",
-      "required": true,
-      "secret": false
-    },
-    "KD_USERNAME": {
-      "label": "集成用户",
-      "required": true,
-      "secret": false
-    },
-    "KD_APP_ID": {
-      "label": "应用 ID",
-      "required": true,
-      "secret": false
-    },
-    "KD_APP_SEC": {
-      "label": "应用密钥",
-      "required": true,
-      "secret": true
-    }
+    "KD_SERVER_URL": {"label": "金蝶服务器地址", "required": true, "secret": false},
+    "KD_ACCT_ID": {"label": "账套 ID", "required": true, "secret": false},
+    "KD_APP_SEC": {"label": "应用密钥", "required": true, "secret": true}
   },
   "health_check_tool": "health_check",
-  "default_mode": "readonly",
-  "business_domains": ["master_data", "sales", "purchase", "inventory", "finance"],
-  "risk_defaults": {
-    "delete_enabled": false,
-    "danger_tools_enabled": false,
-    "workflow_requires_approval": true
-  }
+  "default_mode": "readonly"
 }
 ```
 
@@ -822,24 +717,31 @@ get_async_task
 
 一个新的企业管理软件 MCP Server 交付前必须满足：
 
-- 可以通过 stdio 启动。
-- 支持 `MCP_MODE=readonly`。
-- 支持 `health_check`。
-- 支持 `get_server_profile`。
-- 支持 `list_capabilities`。
-- 支持 `query_metadata`。
-- 能识别或配置企业软件版本。
-- 能声明支持的企业软件版本范围。
-- 版本不兼容时能禁用写入、审核、删除等高风险工具。
-- 工具命名符合规范。
-- 查询工具支持分页。
-- 写入工具支持 validate 或 dry run。
-- 高风险工具默认禁用或要求审批。
-- 删除工具默认关闭，显式开启时必须有风险提示、人工审批和审计。
-- 错误返回结构化 JSON。
-- 不打印密钥。
-- 有最小单元测试或模拟测试。
-- README 包含 MCPHub 接入示例。
+### 强制项
+
+- [ ] 可以通过 stdio 启动。
+- [ ] 支持 `MCP_MODE=readonly`，默认只读。
+- [ ] 实现 `health_check` 工具。
+- [ ] 实现 `query_metadata` 工具。
+- [ ] 只读模式下写入工具返回错误。
+- [ ] 工具名包含业务对象，避免纯通用名。
+- [ ] 查询工具支持分页（有 limit 上限）。
+- [ ] 错误返回 `{"success": false, "error": "描述"}` 格式。
+- [ ] 不打印密钥到日志。
+- [ ] 不暴露可执行任意代码的工具。
+- [ ] 工具按功能领域或业务对象分文件组织，不全部堆在 `server.py`。
+- [ ] 必备工具放入 `tools/essential.py`，`server.py` 只做入口。
+- [ ] 使用函数式注册（`register_xxx_tools(mcp, ctx)`），不依赖 import 副作用。
+- [ ] 所有工具标注风险等级注解（`READ_ONLY_TOOL` / `WRITE_TOOL` / `DESTRUCTIVE_TOOL`）。
+
+### 推荐项
+
+- [ ] 实现 `preview_write`（写入预览）。
+- [ ] 支持 `MCP_AUDIT_LOG` 审计日志。
+- [ ] 删除工具有独立控制（不随 readwrite 自动开放）。
+- [ ] `health_check` 返回 ERP 版本信息。
+- [ ] 实现 `get_profile` 工具。
+- [ ] README 包含 MCPHub 接入示例。
 
 ## 推荐 README 模板
 
@@ -849,38 +751,24 @@ get_async_task
 # {系统名} MCP Server
 
 ## 功能
-## 支持的业务域
 ## 安装方式
 ## MCPHub 配置示例
 ## 环境变量
-## 支持的软件版本
-## 版本兼容说明
 ## 工具列表
-## 权限和风险等级
-## 只读模式
-## 删除权限和风险提示
-## 写入和审批说明
-## 审计日志
-## 故障排查
+## 只读模式说明
+## 写入和风险说明
 ```
 
 ## 版本管理
 
-标准版本使用语义化版本：
+连接器版本使用语义化版本：
 
 ```text
-standard_version: 1.0
 connector_version: MAJOR.MINOR.PATCH
 ```
 
-破坏性变更：
+破坏性变更（需提升主版本号）：
 
-- 删除工具。
-- 修改工具参数含义。
+- 删除工具或改变工具参数含义。
 - 修改返回结构。
-- 改变默认风险等级。
-- 写入工具默认启用。
-- 扩大或缩小支持的 ERP 版本范围。
-- 删除能力默认策略发生变化。
-
-发生破坏性变更必须提升主版本号。
+- 写入工具默认策略发生变化。

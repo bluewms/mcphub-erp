@@ -22,7 +22,7 @@ MCP Server for Kingdee K3Cloud ERP. Lets AI assistants (Claude Desktop, Claude C
 
 ## Features
 
-- **15 MCP tools**: covers query, bulk export, create, submit, audit, unaudit, delete, push-down, and more
+- **18 MCP tools**: covers query, bulk export, write preview, create, submit, audit, unaudit, delete, push-down, and more
 - **Universal interface design**: a single `form_id` parameter supports materials, customers, sales orders, purchase orders, and all other forms — no per-form configuration needed
 - **Advanced query primitives**: `query_bill_all` (auto-pagination), `query_bill_to_file` (streaming to disk), `query_bill_range` (date sharding) — eliminate the need for manual looping
 - **Read-only / read-write modes**: restrict AI to query-only operations to prevent accidental writes
@@ -192,10 +192,19 @@ Enable Bearer Token authentication via the `MCP_API_KEY` environment variable.
 
 ## Available Tools
 
+### Essential Tools (required by spec, available in read-only mode)
+
+| Tool | Description |
+|------|-------------|
+| `health_check` | Check K3Cloud connection status and server mode |
+| `query_metadata` | Query form field structure (metadata) |
+| `preview_write` | Preview a write operation without modifying data |
+
 ### Query Tools (available in read-only mode)
 
 | Tool | Description |
 |------|-------------|
+| `get_profile` | Get MCP Server identity and connection config |
 | `query_bill` | Query bill data (returns a 2D array) |
 | `query_bill_json` | Query bill data (returns JSON with field names as keys) |
 | `count_bill` | Estimate the number of result rows — useful before large queries |
@@ -203,7 +212,6 @@ Enable Bearer Token authentication via the `MCP_API_KEY` environment variable.
 | `query_bill_to_file` | Auto-paginate and stream results to a local file (ndjson / csv) — suitable for 10,000+ row exports |
 | `query_bill_range` | Auto-shard by date (month / week / day) + paginate — suitable for multi-month / multi-year queries, supports disk output |
 | `view_bill` | View complete details of a single record |
-| `query_metadata` | Query form field structure (metadata) |
 
 ### Write Tools (available in read-write mode)
 
@@ -221,7 +229,7 @@ All tools accept a `form_id` parameter to target any form (materials, customers,
 
 ## Read-Only Mode
 
-Use `--mode readonly` or `MCP_MODE=readonly` to restrict the server to the 8 query tools, preventing accidental AI writes.
+Use `--mode readonly` or `MCP_MODE=readonly` to restrict the server to the 11 read-only tools (essential + query), preventing accidental AI writes.
 
 ```json
 "args": ["kingdee-k3cloud-mcp", "--mode", "readonly"]
@@ -255,6 +263,25 @@ kingdee-k3cloud-mcp (this project)
         ▼
 Kingdee K3Cloud
 ```
+
+### Project Structure
+
+```
+src/kingdee_k3cloud_mcp/
+├── server.py              # Entry: FastMCP instance, SDK management, pagination, setup/main
+├── utils.py               # Tool annotations, response helpers, session detection, utilities
+├── sdk/
+│   └── __init__.py         # RetryableK3CloudApiSdk (auto session recovery)
+└── tools/
+    ├── __init__.py          # ToolContext + register_all_tools
+    ├── essential.py         # Essential: health_check, query_metadata, preview_write
+    ├── profile.py           # Recommended: get_profile
+    ├── query.py             # Query: query_bill, count_bill, query_bill_all, etc. (6 tools)
+    ├── read.py              # Read: view_bill
+    └── write.py             # Write: save_bill, submit_bill, delete_bill, etc. (7 tools)
+```
+
+Tools are organized by functional domain, conforming to the *Enterprise Software MCP Standard Service Specification*. Each tool is annotated with a risk level (`READ_ONLY_TOOL` / `WRITE_TOOL` / `DESTRUCTIVE_TOOL`) for MCPHub permission governance.
 
 This project uses the official Kingdee Python SDK ([kingdee-cdp-webapi-sdk](https://pypi.org/project/kingdee-cdp-webapi-sdk/)) to communicate with the K3Cloud API, and wraps it as standard MCP tools via [FastMCP](https://github.com/modelcontextprotocol/python-sdk).
 

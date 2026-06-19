@@ -48,7 +48,7 @@ services:
       DINGJIE_LANG: ${DINGJIE_LANG:-zh_CN}
       DINGJIE_TIMEOUT: ${DINGJIE_TIMEOUT:-30}
       DINGJIE_VERIFY_SSL: ${DINGJIE_VERIFY_SSL:-1}
-      MCP_MODE: ${MCP_MODE:-readwrite}
+      MCP_MODE: ${MCP_MODE:-readonly}
 
       # ── 金蝶云星空 K3Cloud ──
       KD_ACCT_ID: ${KD_ACCT_ID:-}

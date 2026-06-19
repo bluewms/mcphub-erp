@@ -1,13 +1,13 @@
 """销货出库工具 (SALES_ISSUE)
 
 提供 7 个工具：
-- query_sales_issues: 查询销货出库单列表
-- read_sales_issue: 查看销货出库单详情
-- create_sales_issue: 创建销货出库单
-- approve_sales_issue: 审核销货出库单
-- disapprove_sales_issue: 撤销审核销货出库单
-- delete_sales_issue: 删除销货出库单
-- invalid_sales_issue: 作废销货出库单
+- query_sales_issues: 查询销货出库单列表（只读）
+- read_sales_issue: 查看销货出库单详情（只读）
+- create_sales_issue: 创建销货出库单（写入）
+- approve_sales_issue: 审核销货出库单（写入）
+- disapprove_sales_issue: 撤销审核销货出库单（写入）
+- delete_sales_issue: 删除销货出库单（危险）
+- invalid_sales_issue: 作废销货出库单（危险）
 """
 
 import json
@@ -16,7 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def register_sales_issue_tools(mcp, get_client, is_readonly):
+def register_sales_issue_tools(mcp, get_client, is_readonly, ok_fn, err_fn):
     """注册销货出库相关工具"""
 
     @mcp.tool()
@@ -28,7 +28,7 @@ def register_sales_issue_tools(mcp, get_client, is_readonly):
         limit: int = 100,
         offset: int = 0,
     ) -> str:
-        """查询鼎捷 ERP 销货出库单列表
+        """查询鼎捷 ERP 销货出库单列表。只读工具。
 
         支持按单号、客户、日期范围筛选，返回销货出库单列表。
 
@@ -37,10 +37,11 @@ def register_sales_issue_tools(mcp, get_client, is_readonly):
             customer_no: 客户编号
             start_date: 开始日期 (YYYY-MM-DD)
             end_date: 结束日期 (YYYY-MM-DD)
-            limit: 返回行数上限，默认100
+            limit: 返回行数上限，默认100，最大200
             offset: 跳过行数，用于翻页
         """
         client = get_client()
+        limit = min(limit, 200)
         filters: dict = {"limit": limit, "offset": offset}
         if doc_no:
             filters["doc_no"] = doc_no
@@ -53,13 +54,13 @@ def register_sales_issue_tools(mcp, get_client, is_readonly):
 
         try:
             result = client.query_sales_issues(filters)
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return ok_fn(result)
         except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return err_fn(str(e))
 
     @mcp.tool()
     def read_sales_issue(doc_no: str) -> str:
-        """查看鼎捷 ERP 销货出库单详情
+        """查看鼎捷 ERP 销货出库单详情。只读工具。
 
         通过单号查看销货出库单的所有字段信息，包括单身明细。
 
@@ -69,9 +70,9 @@ def register_sales_issue_tools(mcp, get_client, is_readonly):
         client = get_client()
         try:
             result = client.read_sales_issue(doc_no)
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return ok_fn(result)
         except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return err_fn(str(e))
 
     @mcp.tool()
     def create_sales_issue(
@@ -84,7 +85,9 @@ def register_sales_issue_tools(mcp, get_client, is_readonly):
         remark: str = "",
         details: str = "",
     ) -> str:
-        """创建鼎捷 ERP 销货出库单
+        """创建鼎捷 ERP 销货出库单。写入工具，只读模式下不可用。
+
+        执行前建议先调用 preview_write 预览变更。
 
         Args:
             om_site_id: 营运据点编号
@@ -98,7 +101,7 @@ def register_sales_issue_tools(mcp, get_client, is_readonly):
                 [{"business_qty": 50, "warehouse_no": "WH01"}]
         """
         if is_readonly():
-            return json.dumps({"error": "只读模式：写入操作已禁用"}, ensure_ascii=False)
+            return err_fn("只读模式：写入操作已禁用")
 
         client = get_client()
         data: dict = {
@@ -119,80 +122,82 @@ def register_sales_issue_tools(mcp, get_client, is_readonly):
             try:
                 data["details"] = json.loads(details)
             except json.JSONDecodeError as e:
-                return json.dumps({"error": f"details JSON 格式错误: {e}"}, ensure_ascii=False)
+                return err_fn(f"details JSON 格式错误: {e}")
 
         try:
             result = client.create_sales_issue(data)
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return ok_fn(result)
         except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return err_fn(str(e))
 
     @mcp.tool()
     def approve_sales_issue(doc_no: str) -> str:
-        """审核鼎捷 ERP 销货出库单
+        """审核鼎捷 ERP 销货出库单。写入工具，只读模式下不可用。
 
         Args:
             doc_no: 单号
         """
         if is_readonly():
-            return json.dumps({"error": "只读模式：写入操作已禁用"}, ensure_ascii=False)
+            return err_fn("只读模式：写入操作已禁用")
 
         client = get_client()
         try:
             result = client.approve_sales_issue(doc_no)
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return ok_fn(result)
         except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return err_fn(str(e))
 
     @mcp.tool()
     def disapprove_sales_issue(doc_no: str) -> str:
-        """撤销审核鼎捷 ERP 销货出库单
+        """撤销审核鼎捷 ERP 销货出库单。写入工具，只读模式下不可用。
 
         Args:
             doc_no: 单号
         """
         if is_readonly():
-            return json.dumps({"error": "只读模式：写入操作已禁用"}, ensure_ascii=False)
+            return err_fn("只读模式：写入操作已禁用")
 
         client = get_client()
         try:
             result = client.disapprove_sales_issue(doc_no)
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return ok_fn(result)
         except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return err_fn(str(e))
 
     @mcp.tool()
     def delete_sales_issue(doc_no: str) -> str:
-        """删除鼎捷 ERP 销货出库单
+        """删除鼎捷 ERP 销货出库单。危险工具，只读模式下不可用。
 
-        注意：删除操作不可撤销，请谨慎使用。
+        删除操作可能不可恢复，请谨慎使用。执行前建议先调用 preview_write 预览。
 
         Args:
             doc_no: 单号
         """
         if is_readonly():
-            return json.dumps({"error": "只读模式：写入操作已禁用"}, ensure_ascii=False)
+            return err_fn("只读模式：写入操作已禁用")
 
         client = get_client()
         try:
             result = client.delete_sales_issue(doc_no)
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return ok_fn(result)
         except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return err_fn(str(e))
 
     @mcp.tool()
     def invalid_sales_issue(doc_no: str) -> str:
-        """作废鼎捷 ERP 销货出库单
+        """作废鼎捷 ERP 销货出库单。危险工具，只读模式下不可用。
+
+        作废操作可能不可恢复，请谨慎使用。
 
         Args:
             doc_no: 单号
         """
         if is_readonly():
-            return json.dumps({"error": "只读模式：写入操作已禁用"}, ensure_ascii=False)
+            return err_fn("只读模式：写入操作已禁用")
 
         client = get_client()
         try:
             result = client.invalid_sales_issue(doc_no)
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return ok_fn(result)
         except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return err_fn(str(e))
