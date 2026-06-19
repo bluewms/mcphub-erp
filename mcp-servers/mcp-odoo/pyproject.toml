@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo-mcp"
+version = "1.0.0"
+description = "MCP Server for Odoo Integration"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+keywords = ["odoo", "mcp", "server"]
+authors = [
+    {name = "Lê Anh Tuấn", email = "justin.le.1105@gmail.com"}
+]
+dependencies = [
+    "mcp>=1.27,<2",
+    "requests>=2.31.0",
+]
+
+[project.urls]
+Homepage = "https://tuanle96.github.io/mcp-odoo/"
+Source = "https://github.com/tuanle96/mcp-odoo"
+Documentation = "https://github.com/tuanle96/mcp-odoo#readme"
+Changelog = "https://github.com/tuanle96/mcp-odoo/blob/main/CHANGELOG.md"
+Issues = "https://github.com/tuanle96/mcp-odoo/issues"
+Security = "https://github.com/tuanle96/mcp-odoo/security"
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "isort",
+    "mypy",
+    "pytest",
+    "ruff",
+    "build",
+    "twine",
+]
+
+[project.scripts]
+odoo-mcp = "odoo_mcp.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["odoo_mcp"]
+
+[tool.setuptools.package-data]
+odoo_mcp = ["data/*.json"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true

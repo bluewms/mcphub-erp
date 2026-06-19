@@ -1,0 +1,121 @@
+# Architecture
+
+Odoo MCP is a thin MCP server around a deliberately small Odoo client. The design goal is simple: give agents high-signal Odoo context while keeping execution paths inspectable and bounded.
+
+## System shape
+
+```mermaid
+flowchart LR
+  Agent["MCP client or agent"] --> Transport["stdio / Streamable HTTP / SSE"]
+  Transport --> Server["odoo_mcp.server"]
+  Server --> Tools["Tools, resources, prompts"]
+  Tools --> Client["odoo_mcp.odoo_client"]
+  Client --> XMLRPC["Odoo XML-RPC"]
+  Client --> JSON2["Odoo External JSON-2"]
+  Tools --> LocalScan["Local addon source scan"]
+```
+
+## Main modules
+
+| Module | Responsibility |
+| --- | --- |
+| `src/odoo_mcp/__main__.py` | CLI entry point, transport selection, HTTP bind safety, non-secret health output. |
+| `src/odoo_mcp/setup_wizard.py` | Interactive `--setup` wizard: prompt, test connection, write config, print client snippets. |
+| `src/odoo_mcp/server.py` | Public re-export surface: imports core + tool modules (registering all tools/resources/prompts) and re-exports every public symbol. |
+| `src/odoo_mcp/server_core.py` | FastMCP instance, `AppContext` + lifespan, shared infra (instance resolution, smart-field selection, write approvals, N+1 tracking), `odoo://` resources. |
+| `src/odoo_mcp/tools_read.py` | Read-domain tools: search/read/aggregate/schema/profile/health, with rate-limit checks. |
+| `src/odoo_mcp/tools_write.py` | Gated write workflow tools plus `execute_method` and chatter, including elicitation. |
+| `src/odoo_mcp/tools_diagnostics.py` | Diagnostic, migration, and planning tools (access, upgrade risk, fit/gap, addon scan, JSON-2 preview). |
+| `src/odoo_mcp/tools_knowledge.py` | Local-first BM25 knowledge tools: `index_knowledge`, `search_knowledge`, `knowledge_stats`. |
+| `src/odoo_mcp/tools_accounting.py` | Read-only accounting tools: AR/AP aging and health summary. |
+| `src/odoo_mcp/tools_async.py` | Background task tools over an allowlist of long-running read operations. |
+| `src/odoo_mcp/prompts.py` | The five agent prompts. |
+| `src/odoo_mcp/task_queue.py` | Bounded thread-pool task manager with TTL'd, size-capped result retention. |
+| `src/odoo_mcp/rate_limit.py` | Opt-in sliding-window call-rate tracking per `instance:tool` (warn/block modes). |
+| `src/odoo_mcp/knowledge_index.py` | Pure BM25 index + bounded per-`instance:model` knowledge store. |
+| `src/odoo_mcp/accounting_tools.py` | Pure aging-bucket and unreconciled-summary builders. |
+| `src/odoo_mcp/tool_helpers.py` | Pure request/validation helpers: name validation, domain normalization, free-text query domains, version parsing, request models. |
+| `src/odoo_mcp/schema_cache.py` | Bounded TTL/LRU cache backing per-instance schema caches. |
+| `src/odoo_mcp/access_helpers.py` | Pure ACL/record-rule analysis helpers behind `diagnose_access`. |
+| `src/odoo_mcp/write_policy.py` | Write-enable flags and the reviewed side-effect method policy file. |
+| `src/odoo_mcp/odoo_client.py` | Odoo connection, XML-RPC calls, JSON-2 calls, profile helpers. |
+| `src/odoo_mcp/diagnostics.py` | Pure diagnostic helpers for Odoo call analysis, JSON-2 payloads, migration risk, fit/gap reports. |
+| `src/odoo_mcp/agent_tools.py` | Pure agent helpers for safe writes, domain building, addon scanning, and business pack reports. |
+| `scripts/odoo_compose_smoke.py` | Real Docker Compose smoke validation against disposable Odoo stacks, restricted users, custom record rules, and packaged addon XML install/update. |
+
+## Transport model
+
+`stdio` is the default MCP transport. It is local, simple, and compatible with most MCP clients.
+
+Streamable HTTP and SSE are opt-in. The CLI binds to `127.0.0.1` by default and rejects non-local binds unless the operator passes `--allow-remote-http` or sets `MCP_ALLOW_REMOTE_HTTP=1`.
+
+HTTP allowlists such as `MCP_ALLOWED_HOSTS` and `MCP_ALLOWED_ORIGINS` are hardening controls, not authentication. Put remote deployments behind external auth and TLS.
+
+## Odoo transport model
+
+| Odoo version | Recommended transport | Notes |
+| --- | --- | --- |
+| 16.0 | XML-RPC | Default compatibility path. |
+| 17.0 | XML-RPC | Default compatibility path. |
+| 18.0 | XML-RPC | Default compatibility path. |
+| 19.0 | JSON-2 or XML-RPC | JSON-2 is opt-in through `ODOO_TRANSPORT=json2`. |
+
+JSON-2 uses bearer authentication and named JSON arguments. XML-RPC carries the database name per request; JSON-2 can receive `X-Odoo-Database` when `ODOO_JSON2_DATABASE_HEADER=1`.
+
+## Safety boundaries
+
+The server separates read, diagnosis, preview, validation, and execution.
+
+Read and diagnostic tools do not execute candidate write methods. `diagnose_access` reads ACL, record-rule, current-user, and optional count metadata using only the current Odoo credential; it does not use sudo or impersonation.
+
+`execute_method` blocks direct `create`, `write`, and `unlink`. Common side-effect method names such as `message_post`, `action_*`, `button_*`, `*_send*`, `*_post*`, and `*_validate*` are blocked unless the deployment explicitly allowlists exact methods with `ODOO_MCP_ALLOWED_SIDE_EFFECT_METHODS=model.method`. The older broad escape hatch, `ODOO_MCP_ALLOW_UNKNOWN_METHODS=1`, remains available for trusted deployments and is reported as broad mode by `health_check`.
+
+The standard write path is:
+
+```mermaid
+flowchart LR
+  Preview["preview_write"] --> Validate["validate_write"]
+  Validate --> Token["same-session approval token"]
+  Token --> Confirm["confirm=true"]
+  Confirm --> Gate["ODOO_MCP_ENABLE_WRITES=1"]
+  Gate --> Execute["execute_approved_write"]
+```
+
+`validate_write` stores an executable approval only when validation used trusted, non-empty live Odoo `fields_get` metadata. Client-provided or shape-only metadata can explain issues, but it does not authorize execution.
+
+## Local addon scanning
+
+`scan_addons_source` scans files from configured `ODOO_ADDONS_PATHS` roots without importing addon code. Explicit paths must live inside those configured roots. This keeps source inspection deterministic and avoids executing arbitrary addon imports.
+
+The Python scanner uses static AST checks for custom model classes, overridden `create`/`write`/`unlink`, sudo usage, computed-field `@api.depends` coverage, and whether CRUD overrides clearly return the `super()` result.
+
+## Smoke harness
+
+The Docker Compose smoke harness mounts `tests/fixtures/odoo_addons` into each
+disposable Odoo container as `/mnt/extra-addons`. It installs and updates the
+`mcp_smoke_access` addon with Odoo's module CLI, then diagnoses the addon's
+XML-defined partner record rule through MCP as a dedicated fixture credential
+without sudo or impersonation.
+
+## Multi-instance routing
+
+One server process can serve several named Odoo instances. `load_instances_config()` in `odoo_client.py` resolves configuration from legacy env vars (single instance named `default`), a flat config file (same), or a multi-instance file with an `instances` map plus a `default` key (`ODOO_CONFIG_FILE` is checked before the standard paths).
+
+Routing rules:
+
+- Tools accept an optional `instance` parameter; `_resolve_odoo()` maps it to a lazily-created, per-name cached `OdooClient` on the lifespan context. Instances are only contacted when a tool targets them.
+- Instance entries are self-contained: credentials and transport never fall back to env vars, so one instance can never inherit another deployment's API key. Non-credential knobs (`ODOO_TIMEOUT`, `ODOO_VERIFY_SSL`, `ODOO_LOCALE`) remain global fallbacks.
+- Approval tokens (standard writes and chatter) hash the instance name into the canonical payload. A token validated against one instance cannot verify or execute against another; `execute_approved_write` takes the target instance from the approval record only.
+- Schema caches are partitioned per instance (`{instance}:{model}`), so field metadata from one database is never served for another.
+- MCP resources (`odoo://…`) always use the default instance; multi-instance access goes through tools.
+- `list_instances` exposes names, URLs, databases, and transports through an explicit allowlist — credentials are never serialized.
+
+## Import contracts
+
+`.importlinter` enforces two contracts (run `lint-imports` with `PYTHONPATH=src`): core helper modules must never import the MCP surface, and the surface layers flow `server` → tool modules → `server_core`. Tool modules resolve test-patchable symbols (`get_odoo_client`, `resolve_instance_name`, …) through a late `from . import server` lookup so `monkeypatch.setattr(server, …)` keeps working; those late edges are the only ignored imports.
+
+## Runtime state
+
+Approval tokens are process-local and short-lived. They are intended for one MCP server session, not durable queues or cross-process approvals. The same philosophy applies to background task results (TTL'd, size-capped, in-memory) and knowledge indexes (bounded by `ODOO_MCP_KNOWLEDGE_MAX_DOCS`): a restart clears them by design.
+
+No Odoo credentials are written by the server. Startup logs mask known secret environment variables.

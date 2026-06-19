@@ -1,0 +1,30 @@
+{
+  "default": "acme",
+  "instances": {
+    "acme": {
+      "url": "https://acme.odoo.com",
+      "db": "acme",
+      "username": "bot",
+      "api_key": "your-odoo-api-key",
+      "transport": "json2",
+      "tags": ["eu", "retail"]
+    },
+    "globex": {
+      "url": "https://globex.odoo.com",
+      "db": "globex",
+      "username": "bot",
+      "password": "your-password",
+      "lang": "fr_FR",
+      "timeout": 60,
+      "verify_ssl": true,
+      "tags": ["eu", "manufacturing"]
+    },
+    "internal_sandbox": {
+      "url": "https://sandbox.odoo.com",
+      "db": "sandbox",
+      "username": "bot",
+      "password": "your-password",
+      "cross_instance": false
+    }
+  }
+}

@@ -1,0 +1,68 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Logs
+logs/
+*.log
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment configuration
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Odoo specific
+odoo_config.json
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local AI orchestration / planning artifacts
+.omc/
+plans/
+.claude/
+.harness/
+.agents/
+.codex/
+AGENTS.md
+# Local harness CI workflows depend on the untracked .harness/ toolchain
+.github/workflows/harness.yml
+.github/workflows/eval-nightly.yml

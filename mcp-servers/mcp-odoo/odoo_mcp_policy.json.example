@@ -1,0 +1,20 @@
+{
+  "comment": "Reviewed side-effect methods for execute_method. Commit this file to git so every allowlist change goes through PR review. Activate by copying to ./odoo_mcp_policy.json or pointing ODOO_MCP_POLICY_FILE at it.",
+  "allowed_side_effect_methods": [
+    {
+      "method": "sale.order.action_confirm",
+      "reviewed_by": "your-name",
+      "date": "2026-06-10",
+      "reason": "Sales team needs agents to confirm quotations after human approval in chat."
+    },
+    "stock.picking.button_validate"
+  ],
+  "field_acl_comment": "Optional read-path field ACL. Per instance (use 'default' for the default instance), per model, exactly one of 'deny' (blacklist) or 'allow' (exclusive whitelist). '*' is a per-instance model wildcard. Denied fields are removed from every read tool, resource, and knowledge index, with a redacted_fields note; aggregation on a denied field is rejected. No field_acl key = no change. See docs/field-acl.md.",
+  "field_acl": {
+    "default": {
+      "res.partner": { "deny": ["credit_limit", "comment"] },
+      "hr.employee": { "allow": ["name", "work_email", "department_id", "job_id"] },
+      "*": { "deny": ["message_ids"] }
+    }
+  }
+}
